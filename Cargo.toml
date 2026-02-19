@@ -10,3 +10,5 @@ edition = "2024"
 # Canonical dependency (CI / production / remote clones)
 crypto-rs = { git = "https://github.com/BEULAHEVANJALIN/crypto-rs"}
 num-bigint = "0.4.6"
+num-traits = "0.2.19"
+rand = { version = "0.10.0", features = ["chacha"] }
