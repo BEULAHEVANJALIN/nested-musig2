@@ -55,7 +55,6 @@ dependencies = [
 [[package]]
 name = "crypto-rs"
 version = "0.1.0"
-source = "git+https://github.com/BEULAHEVANJALIN/crypto-rs#610b6780a4b90c7e87a06ed38f6cb96e989c6a14"
 dependencies = [
  "csv",
  "hex",
@@ -166,6 +165,7 @@ name = "nested-musig2"
 version = "0.1.0"
 dependencies = [
  "crypto-rs",
+ "num-bigint",
 ]
 
 [[package]]
