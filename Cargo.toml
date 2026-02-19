@@ -4,3 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# Local dev option
+# crypto-rs = { path = "../crypto-rs" }
+
+# Canonical dependency (CI / production / remote clones)
+crypto-rs = { git = "https://github.com/BEULAHEVANJALIN/crypto-rs"}

@@ -1,0 +1,15 @@
+# -----------------------------------------------------------------------------
+# Local workspace override
+#
+# This project expects the following directory layout:
+#
+#   projects/
+#   ├── crypto-rs/
+#   └── nested-musig2/
+#
+# The crypto-rs dependency is replaced with a local path for faster
+# development. If you do not have this layout, remove or edit this file.
+# -----------------------------------------------------------------------------
+
+[patch."https://github.com/BEULAHEVANJALIN/crypto-rs"]
+crypto-rs = { path = "../crypto-rs" }
