@@ -1,9 +1,9 @@
+use crate::utils::sample_nonzero_scalar_with_rng as sample_secret_scalar;
 use crypto_rs::field::{ScalarField, Secp256k1ScalarField};
 use crypto_rs::secp256k1::{Secp256k1Point, Secp256k1Scalar};
 
-use num_bigint::BigUint;
 use num_traits::Zero;
-use rand::{CryptoRng, Rng, RngExt};
+use rand::{CryptoRng, Rng};
 
 /// BIP340-style keypair:
 /// - `pk` is a full point, but canonicalized so its Y is even.
@@ -21,21 +21,6 @@ impl KeyPair {
     #[inline]
     pub fn pk_xonly(&self) -> [u8; 32] {
         self.pk.x_only_bytes()
-    }
-}
-
-/// Samples a uniformly random secp256k1 secret scalar in the range `[1, n-1]` using rejection sampling.
-fn sample_secret_scalar<R: Rng + CryptoRng>(rng: &mut R) -> Secp256k1Scalar {
-    let n = Secp256k1ScalarField::order();
-    loop {
-        let mut buf = [0u8; 32];
-        rng.fill(&mut buf);
-        let x = BigUint::from_bytes_be(&buf);
-        // Reject x == 0 or x >= n
-        if x.is_zero() || x >= n {
-            continue;
-        }
-        return Secp256k1Scalar::new(x);
     }
 }
 
