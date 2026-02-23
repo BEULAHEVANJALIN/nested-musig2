@@ -10,6 +10,8 @@ use crypto_rs::secp256k1::{Secp256k1Point, Secp256k1Scalar};
 /// Round2 signer output: (state'_1, out'_1) = (R, s1)
 pub type Round2State = Secp256k1Point;
 pub type Round2Out = Secp256k1Scalar;
+/// Signature type σ := (R, s)
+pub type Signature = (Round2State, Round2Out);
 
 /// b_{d+1} := Hnon( pk_{1,d} , out^{d+1} )
 /// Transcript: pk_{1,d}.xonly || encode(out^{d+1}[0]) || ... || encode(out^{d+1}[nu-1])
@@ -249,6 +251,24 @@ pub fn sign_agg_prime(
     Ok((R0.clone(), s_sum))
 }
 
+/// Ver(X̃, m, σ):
+/// return (g^s == R + X̃^c) where c = Hsig(X̃, R, m)
+pub fn ver(par: &Params, X_tilde: &Secp256k1Point, msg: &[u8], sig: &Signature) -> bool {
+    let (R, s) = sig;
+    if X_tilde.is_identity() || R.is_identity() {
+        return false;
+    }
+    // c := Hsig(X̃, R, m)
+    let c = match compute_challenge_c(par, X_tilde, R, msg) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    // Check: g*s == R + X*c
+    let g = Secp256k1Point::generator();
+    let lhs = &g * s;
+    let rhs = R.clone() + &(X_tilde.clone() * &c);
+    lhs == rhs
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,26 +276,6 @@ mod tests {
     use crate::keygen::keygen_with_rng;
     use crate::round1::{sign_agg, sign_agg_ext, sign_round1_with_rng};
     use rand::{SeedableRng, rngs::ChaCha20Rng};
-
-    fn schnorr_verify_like(
-        par: &Params,
-        X: &Secp256k1Point,
-        msg: &[u8],
-        R: &Secp256k1Point,
-        s: &Secp256k1Scalar,
-    ) -> bool {
-        if X.is_identity() || R.is_identity() {
-            return false;
-        }
-        let c = match super::compute_challenge_c(par, X, R, msg) {
-            Ok(c) => c,
-            Err(_) => return false,
-        };
-        let g = Secp256k1Point::generator();
-        let lhs = &g * s;
-        let rhs = R.clone() + &(X.clone() * &c);
-        lhs == rhs
-    }
 
     #[test]
     fn signprime_lambda1_musig2_basecase_verifies() {
@@ -311,7 +311,8 @@ mod tests {
         .unwrap();
         assert_eq!(R1, R2);
         let s = s1 + &s2;
-        assert!(schnorr_verify_like(&par, &X, msg, &R1, &s));
+        let sig: Signature = (R1.clone(), s);
+        assert!(ver(&par, &X, msg, &sig));
     }
 
     #[test]
@@ -381,7 +382,8 @@ mod tests {
         assert_eq!(R_a, R_c);
         // Root final signature scalar s = s_abby + s_c
         let s_final = s_abby + &s_c;
-        assert!(schnorr_verify_like(&par, &X_root, msg, &R_a, &s_final));
+        let sig: Signature = (R_a.clone(), s_final);
+        assert!(ver(&par, &X_root, msg, &sig));
     }
 
     #[test]
@@ -389,16 +391,12 @@ mod tests {
         let par = Params::default();
         let msg = b"aggprime test";
         let mut rng = ChaCha20Rng::from_seed([33u8; 32]);
-
         let k1 = keygen_with_rng(&mut rng);
         let k2 = keygen_with_rng(&mut rng);
-
         let X = key_agg(&par, &[k1.pk.clone(), k2.pk.clone()]).unwrap();
-
         let (o1, st1) = sign_round1_with_rng(2, &mut rng).unwrap();
         let (o2, st2) = sign_round1_with_rng(2, &mut rng).unwrap();
         let out0 = sign_agg(&[o1, o2]).unwrap();
-
         let p1 = sign_prime(
             &par,
             st1,
@@ -417,10 +415,9 @@ mod tests {
             &[vec![k1.pk.clone()]],
         )
         .unwrap();
-
         let (R, s) = sign_agg_prime(&[p1.clone(), p2.clone()]).unwrap();
         assert_eq!(R, p1.0);
-
-        assert!(schnorr_verify_like(&par, &X, msg, &R, &s));
+        let sig: Signature = (R.clone(), s);
+        assert!(ver(&par, &X, msg, &sig));
     }
 }
