@@ -1,6 +1,7 @@
 use crate::error::MusigError;
 use crate::params::Params;
 use crate::utils::sample_nonzero_scalar_with_rng;
+use crate::utils::{append_point_xy, encode_xonly};
 use crypto_rs::secp256k1::{Secp256k1Point, Secp256k1Scalar};
 use rand::{CryptoRng, Rng};
 
@@ -17,8 +18,12 @@ pub struct Round1State {
 
 impl Round1State {
     #[allow(dead_code)]
-    pub(crate) fn nonces(&self) -> &[Secp256k1Scalar] {
-        &self.nonces
+    pub(crate) fn len(&self) -> usize {
+        self.nonces.len()
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &Secp256k1Scalar> {
+        self.nonces.iter()
     }
 }
 
@@ -33,7 +38,6 @@ pub fn sign_round1_with_rng<R: Rng + CryptoRng>(
     if nu == 0 {
         return Err(MusigError::InvalidInput);
     }
-
     let g = Secp256k1Point::generator();
     let mut out = Vec::with_capacity(nu);
     let mut state = Vec::with_capacity(nu);
@@ -94,7 +98,7 @@ pub fn sign_agg(outs: &[Round1Out]) -> Result<Round1Out, MusigError> {
 /// Compute `b = Hnon( X̃_xonly || encode(out_internal) )`.
 ///
 /// Transcript format:
-/// - `X~` included as x-only (32 bytes)
+/// - `X̃` included as x-only (32 bytes)
 /// - Each `R'_j` included as fixed-length `x(32) || y(32)`
 #[allow(non_snake_case)]
 fn compute_b(
@@ -102,33 +106,21 @@ fn compute_b(
     X_tilde: &Secp256k1Point,
     out_internal: &[Secp256k1Point],
 ) -> Result<Secp256k1Scalar, MusigError> {
-    if X_tilde.is_identity() {
-        return Err(MusigError::InvalidPubkey);
-    }
     let mut t = Vec::with_capacity(32 + out_internal.len() * 64);
-    // include aggregate key (x-only)
-    t.extend_from_slice(&X_tilde.x_only_bytes());
-    // include each R'_j as x(32)||y(32) padded
+    // X̃ x-only
+    t.extend_from_slice(&encode_xonly(X_tilde, MusigError::InvalidPubkey)?);
+    // each R'_j as x||y
     for R in out_internal {
-        if R.is_identity() {
-            return Err(MusigError::InvalidNonce);
-        }
-        t.extend_from_slice(&R.x_only_bytes());
-
-        let yb = R.y.to_bytes_be();
-        if yb.len() > 32 {
-            return Err(MusigError::InvalidNonce);
-        }
-        let mut ypad = [0u8; 32];
-        ypad[32 - yb.len()..].copy_from_slice(&yb);
-        t.extend_from_slice(&ypad);
+        append_point_xy(&mut t, R, MusigError::InvalidNonce)?;
     }
     Ok(par.hnon(&t))
 }
 
 /// SignAggExt(out_internal, X̃):
 /// b := Hnon(X̃, out_internal)
-/// R_j := (R'_j)^(b^(j-1))   (additive: R_j := (b^(j-1)) * R'_j)
+/// Paper uses j in 1..ν and exponent b^(j-1).
+/// Our vectors are 0-indexed, so index i corresponds to j=i+1 and exponent b^i.
+/// R[i] := b^i * R'[i]
 #[allow(non_snake_case)]
 pub fn sign_agg_ext(
     par: &Params,
@@ -162,7 +154,7 @@ mod tests {
         let mut rng = ChaCha20Rng::from_seed([11u8; 32]);
         let (out, state) = sign_round1_with_rng(3, &mut rng).unwrap();
         assert_eq!(out.len(), 3);
-        assert_eq!(state.nonces().len(), 3);
+        assert_eq!(state.len(), 3);
     }
 
     #[test]

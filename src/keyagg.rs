@@ -1,31 +1,13 @@
 use crate::error::MusigError;
 use crate::params::Params;
+use crate::utils::encode_point_xy;
 use crypto_rs::secp256k1::{Secp256k1Point, Secp256k1Scalar};
-
-/// Fixed-length encoding of a point: x(32) || y(32).
-/// This is for deterministic sorting/hashing only (not SEC serialization).
-fn encode_pubkey_xy(pk: &Secp256k1Point) -> Result<[u8; 64], MusigError> {
-    if pk.is_identity() {
-        return Err(MusigError::InvalidPubkey);
-    }
-    let mut out = [0u8; 64];
-    let xb = pk.x_only_bytes();
-    out[..32].copy_from_slice(&xb);
-
-    // y might not be fixed length; pad to 32 bytes.
-    let yb = pk.y.to_bytes_be();
-    if yb.len() > 32 {
-        return Err(MusigError::InvalidPubkey);
-    }
-    out[64 - yb.len()..64].copy_from_slice(&yb);
-    Ok(out)
-}
 
 /// Deterministically sort pubkeys by their 64-byte encoding.
 fn sort_pubkeys(pubkeys: &[Secp256k1Point]) -> Result<Vec<Secp256k1Point>, MusigError> {
     let mut pairs: Vec<([u8; 64], Secp256k1Point)> = Vec::with_capacity(pubkeys.len());
     for pk in pubkeys {
-        pairs.push((encode_pubkey_xy(pk)?, pk.clone()));
+        pairs.push((encode_point_xy(pk, MusigError::InvalidPubkey)?, pk.clone()));
     }
     pairs.sort_by(|(ea, _), (eb, _)| ea.cmp(eb));
     Ok(pairs.into_iter().map(|(_, pk)| pk).collect())
@@ -36,7 +18,7 @@ fn encode_pubkey_list(pubkeys: &[Secp256k1Point]) -> Result<Vec<u8>, MusigError>
     let sorted = sort_pubkeys(pubkeys)?;
     let mut out = Vec::with_capacity(sorted.len() * 64);
     for pk in &sorted {
-        out.extend_from_slice(&encode_pubkey_xy(pk)?);
+        out.extend_from_slice(&encode_point_xy(pk, MusigError::InvalidPubkey)?);
     }
     Ok(out)
 }
@@ -52,7 +34,7 @@ pub fn key_agg_coef(
         return Err(MusigError::InvalidInput);
     }
     let mut buf = encode_pubkey_list(L)?;
-    buf.extend_from_slice(&encode_pubkey_xy(Xi)?);
+    buf.extend_from_slice(&encode_point_xy(Xi, MusigError::InvalidPubkey)?);
     Ok(par.hagg(&buf))
 }
 

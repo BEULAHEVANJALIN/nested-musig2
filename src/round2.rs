@@ -4,27 +4,12 @@ use crate::error::MusigError;
 use crate::keyagg::{key_agg, key_agg_coef};
 use crate::params::Params;
 use crate::round1::{Round1Out, Round1State};
+use crate::utils::{append_point_xy, encode_xonly};
 use crypto_rs::secp256k1::{Secp256k1Point, Secp256k1Scalar};
 
 /// Round2 signer output: (state'_1, out'_1) = (R, s1)
 pub type Round2State = Secp256k1Point;
 pub type Round2Out = Secp256k1Scalar;
-
-/// Fixed-length point encoding for transcripts: x(32) || y(32).
-fn encode_point_xy(p: &Secp256k1Point) -> Result<[u8; 64], MusigError> {
-    if p.is_identity() {
-        return Err(MusigError::InvalidNonce);
-    }
-    let mut out = [0u8; 64];
-    out[..32].copy_from_slice(&p.x_only_bytes());
-
-    let yb = p.y.to_bytes_be();
-    if yb.len() > 32 {
-        return Err(MusigError::InvalidNonce);
-    }
-    out[64 - yb.len()..].copy_from_slice(&yb);
-    Ok(out)
-}
 
 /// b_{d+1} := Hnon( pk_{1,d} , out^{d+1} )
 /// Transcript: pk_{1,d}.xonly || encode(out^{d+1}[0]) || ... || encode(out^{d+1}[nu-1])
@@ -42,13 +27,13 @@ fn compute_b_nested(
     let mut t = Vec::with_capacity(32 + out_next.len() * 64);
     t.extend_from_slice(&pk_1_d.x_only_bytes());
     for R in out_next {
-        t.extend_from_slice(&encode_point_xy(R)?);
+        append_point_xy(&mut t, R, MusigError::InvalidNonce)?;
     }
     Ok(par.hnon(&t))
 }
 
-/// b0 := Hnon_bar( X~ , out^0 , m )
-/// Transcript: X~.xonly || encode(out^0[0]) || ... || encode(out^0[nu-1]) || m
+/// b0 := Hnon_bar( X̃ , out^0 , m )
+/// Transcript: X̃.xonly || encode(out^0[0]) || ... || encode(out^0[nu-1]) || m
 fn compute_b0(
     par: &Params,
     X_tilde: &Secp256k1Point,
@@ -61,15 +46,13 @@ fn compute_b0(
     let mut t = Vec::with_capacity(32 + out0.len() * 64 + msg.len());
     t.extend_from_slice(&X_tilde.x_only_bytes());
     for R in out0 {
-        t.extend_from_slice(&encode_point_xy(R)?);
+        append_point_xy(&mut t, R, MusigError::InvalidNonce)?;
     }
     t.extend_from_slice(msg);
     Ok(par.hnon_bar(&t))
 }
 
-/// c := Hsig( X~ , R , m )
-/// Transcript: X~.xonly || encode(R) || m
-////// Transcript for c = Hsig(X̃, R, m)
+/// c := Hsig( X̃ , R , m )
 #[allow(non_snake_case)]
 fn compute_challenge_c(
     par: &Params,
@@ -77,12 +60,9 @@ fn compute_challenge_c(
     R: &Secp256k1Point,
     msg: &[u8],
 ) -> Result<Secp256k1Scalar, MusigError> {
-    if X_tilde.is_identity() || R.is_identity() {
-        return Err(MusigError::InvalidInput);
-    }
     let mut t = Vec::with_capacity(32 + 64 + msg.len());
-    t.extend_from_slice(&X_tilde.x_only_bytes());
-    t.extend_from_slice(&encode_point_xy(R)?);
+    t.extend_from_slice(&encode_xonly(X_tilde, MusigError::InvalidPubkey)?);
+    append_point_xy(&mut t, R, MusigError::InvalidNonce)?;
     t.extend_from_slice(msg);
     Ok(par.hsig(&t))
 }
@@ -115,13 +95,9 @@ fn compute_nonce_scalar_sum(
     state: &Round1State,
     b_hat: &Secp256k1Scalar,
 ) -> Result<Secp256k1Scalar, MusigError> {
-    let nonces = state.nonces();
-    if nonces.is_empty() {
-        return Err(MusigError::InvalidInput);
-    }
     let mut acc = Secp256k1Scalar::zero();
     let mut e = Secp256k1Scalar::one(); // b_hat^0
-    for rj in nonces {
+    for rj in state.iter() {
         let term = rj.clone() * &e;
         acc = acc + &term;
         e = &e * b_hat;
@@ -151,7 +127,7 @@ pub fn sign_prime(
     }
     // ν must be consistent across all out^d and match state nonces.
     let nu = outs_by_depth[0].len();
-    if nu == 0 || state1.nonces().len() != nu {
+    if nu == 0 || state1.len() != nu {
         return Err(MusigError::InvalidInput);
     }
     for out_d in outs_by_depth {
@@ -177,6 +153,9 @@ pub fn sign_prime(
     let mut b_nested_prod = Secp256k1Scalar::one();
     let X_tilde: Secp256k1Point;
     if lambda == 1 {
+        if cosigners_by_depth[0].iter().any(|pk| pk == &pk_leaf) {
+            return Err(MusigError::InvalidInput);
+        }
         // L0 := {pk_leaf} ∪ cosigners[0]
         let mut L0 = Vec::with_capacity(1 + cosigners_by_depth[0].len());
         L0.push(pk_leaf.clone());
@@ -187,6 +166,9 @@ pub fn sign_prime(
     } else {
         // Leaf depth: d = Λ-1
         let d_leaf = lambda - 1;
+        if cosigners_by_depth[d_leaf].iter().any(|pk| pk == &pk_leaf) {
+            return Err(MusigError::InvalidInput);
+        }
         let mut L_leaf = Vec::with_capacity(1 + cosigners_by_depth[d_leaf].len());
         L_leaf.push(pk_leaf.clone());
         L_leaf.extend_from_slice(&cosigners_by_depth[d_leaf]);
@@ -202,6 +184,9 @@ pub fn sign_prime(
             // b_{d+1} := Hnon(pk_{1,d}, out^{d+1})
             let b_next = compute_b_nested(par, &pk_1_d, &outs_by_depth[d + 1])?;
             b_nested_prod = &b_nested_prod * &b_next;
+            if cosigners_by_depth[d].iter().any(|pk| pk == &pk_1_d) {
+                return Err(MusigError::InvalidInput);
+            }
             // L_d := {pk_{1,d}} ∪ cosigners[d]
             let mut L_d = Vec::with_capacity(1 + cosigners_by_depth[d].len());
             L_d.push(pk_1_d.clone());
@@ -215,19 +200,19 @@ pub fn sign_prime(
                 return Err(MusigError::InvalidPubkey);
             }
         }
-        // After d=0 iteration, pk_1_d is pk_{1,-1} = X~
+        // After d=0 iteration, pk_1_d is pk_{1,-1} = X̃
         X_tilde = pk_1_d;
         if X_tilde.is_identity() {
             return Err(MusigError::InvalidPubkey);
         }
     }
-    // b0 := Hnon_bar(X~, out^0, m)
+    // b0 := Hnon_bar(X̃, out^0, m)
     let b0 = compute_b0(par, &X_tilde, &outs_by_depth[0], msg)?;
     // R := Σ_j out^0[j] * (b0^j)
     let R = compute_effective_R(&outs_by_depth[0], &b0)?;
     // b_hat := b0 * Π_{d=1..Λ-1} b_d
     let b_hat = &b0 * &b_nested_prod;
-    // c := Hsig(X~, R, m)
+    // c := Hsig(X̃, R, m)
     let c = compute_challenge_c(par, &X_tilde, &R, msg)?;
     // c_hat := c * a_prod
     let c_hat = &c * &a_prod;
