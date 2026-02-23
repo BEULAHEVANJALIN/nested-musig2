@@ -17,7 +17,6 @@ pub struct Round1State {
 }
 
 impl Round1State {
-    #[allow(dead_code)]
     pub(crate) fn len(&self) -> usize {
         self.nonces.len()
     }

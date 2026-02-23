@@ -224,6 +224,31 @@ pub fn sign_prime(
     Ok((R, s))
 }
 
+/// SignAgg′ : aggregate second-round outputs at a given depth.
+/// Input is a list of (R, s_i). Output is (R, sum_i s_i).
+pub fn sign_agg_prime(
+    parts: &[(Round2State, Round2Out)],
+) -> Result<(Round2State, Round2Out), MusigError> {
+    if parts.is_empty() {
+        return Err(MusigError::InvalidInput);
+    }
+    let (R0, _) = &parts[0];
+    if R0.is_identity() {
+        return Err(MusigError::InvalidNonce);
+    }
+    // All states must match (prevents an aggregator from mixing incompatible partials).
+    for (R, _) in parts.iter().skip(1) {
+        if R != R0 {
+            return Err(MusigError::InvalidInput);
+        }
+    }
+    let mut s_sum = Secp256k1Scalar::zero();
+    for (_, s_i) in parts {
+        s_sum = s_sum + s_i;
+    }
+    Ok((R0.clone(), s_sum))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,5 +382,45 @@ mod tests {
         // Root final signature scalar s = s_abby + s_c
         let s_final = s_abby + &s_c;
         assert!(schnorr_verify_like(&par, &X_root, msg, &R_a, &s_final));
+    }
+
+    #[test]
+    fn sign_agg_prime_sums_and_checks_R() {
+        let par = Params::default();
+        let msg = b"aggprime test";
+        let mut rng = ChaCha20Rng::from_seed([33u8; 32]);
+
+        let k1 = keygen_with_rng(&mut rng);
+        let k2 = keygen_with_rng(&mut rng);
+
+        let X = key_agg(&par, &[k1.pk.clone(), k2.pk.clone()]).unwrap();
+
+        let (o1, st1) = sign_round1_with_rng(2, &mut rng).unwrap();
+        let (o2, st2) = sign_round1_with_rng(2, &mut rng).unwrap();
+        let out0 = sign_agg(&[o1, o2]).unwrap();
+
+        let p1 = sign_prime(
+            &par,
+            st1,
+            &[out0.clone()],
+            &k1.sk,
+            msg,
+            &[vec![k2.pk.clone()]],
+        )
+        .unwrap();
+        let p2 = sign_prime(
+            &par,
+            st2,
+            &[out0.clone()],
+            &k2.sk,
+            msg,
+            &[vec![k1.pk.clone()]],
+        )
+        .unwrap();
+
+        let (R, s) = sign_agg_prime(&[p1.clone(), p2.clone()]).unwrap();
+        assert_eq!(R, p1.0);
+
+        assert!(schnorr_verify_like(&par, &X, msg, &R, &s));
     }
 }
