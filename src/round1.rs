@@ -12,6 +12,7 @@ pub type Round1Out = Vec<Secp256k1Point>;
 /// First-round secret state held by an actual signer:
 /// `state = (r_1, ..., r_ν)`.
 #[allow(dead_code)]
+#[derive(Clone)]
 pub struct Round1State {
     nonces: Vec<Secp256k1Scalar>,
 }
