@@ -8,7 +8,7 @@ edition = "2024"
 # crypto-rs = { path = "../crypto-rs" }
 
 # Canonical dependency (CI / production / remote clones)
-crypto-rs = { git = "https://github.com/BEULAHEVANJALIN/crypto-rs" }
+crypto-rs = { git = "https://github.com/BEULAHEVANJALIN/crypto-rs", rev = "b0cc48eb5f588370b6ad89b556cff583bbe39ddd" }
 num-bigint = "0.4.6"
 num-traits = "0.2.19"
 rand = { version = "0.10.0", features = ["chacha"] }
